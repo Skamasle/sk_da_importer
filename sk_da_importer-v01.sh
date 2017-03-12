@@ -176,6 +176,7 @@ for sk_da_dom in $sk_da_domain_list
 				sk_da_do_path=${sk_da_dom}/public_html
 			fi
 			if [ "$sk_debug" != 0 ]; then
+				rm -f /home/${sk_da_user}/web/${sk_da_dom}/public_html/index.html
 				rsync -av ${d}/${sk_da_do_path}/ /home/${sk_da_user}/web/${sk_da_dom}/public_html 2>&1 | 
     			while read sk_file_dm; do
        			 	sk_sync=$((sk_sync+1))
@@ -183,6 +184,7 @@ for sk_da_dom in $sk_da_domain_list
 				done
 				echo " "
 			else
+				rm -f /home/${sk_da_user}/web/${sk_da_dom}/public_html/index.html
 				rsync ${d}/${sk_da_do_path}/ /home/${sk_da_user}/web/${sk_da_dom}/public_html
 			fi
 			chown ${sk_da_user}:${sk_da_user} -R /home/${sk_da_user}/web/${sk_da_dom}/public_html
@@ -213,7 +215,9 @@ if [ -e sk_restored_domains ]; then
 cat sk_restored_domains | while read sk_da_mail_domain
 	do	
 		if [ "$(ls -A ${b}/${sk_da_mail_domain}/email/data/imap/)" ]; then
+			tput setaf 2
 			echo "Found Imap for ${sk_da_mail_domain}"
+			tput sgr0
 				ls -1 ${b}/${sk_da_mail_domain}/email/data/imap/ | while read sk_da_imap
 					do
 						/usr/local/vesta/bin/v-add-mail-account $sk_da_user $sk_da_mail_domain $sk_da_imap temp
