@@ -1,12 +1,15 @@
 #!/bin/bash
 # This script is provided whitout any warranty
 # Run at your own risk
-# Version 0.1 beta
+# Version 0.2
 # This script restore backups from DA to VestaCP
 # This script can restore Datases, databases user and passwords, mails and domains.
 # Contact da_importer@skamasle.com
 # Skamasle | Maks Usmanov
 # Twitter @skamasle
+# Turn this to 1 if you want get domains and paths from apache_owened_list 
+# Turn int to 2 if you want to get domains dir "domains" and set public_html as default
+sk_get_dom=1
 if [ ! -e /usr/bin/rsync ] || [ ! -e /usr/bin/file ] ; then
 	echo "#######################################"
 	echo "rsync not installed, try install it"
@@ -105,7 +108,7 @@ do
 	mv backup/${sk_ex1}.conf backup/${sk_ex1}
 done
 # start whit databases
-tput setaf 1
+tput setaf 2
 echo "Start Whit Databases"
 tput sgr0 
 echo "Get local databases"
@@ -141,13 +144,19 @@ sk_run_da_db
 fi
 
 # Start whit domains
-tput setaf 1
+tput setaf 2
 echo "Start Whit Domains"
 tput sgr0 
-sk_da_domain_list=$(grep "=G" ${b}/apache_owned_files.list |grep -v public_html |grep -v private_html)
+if [ "$sk_get_dom" = 1 ];then
+	sk_da_domain_list=$(grep "=G" ${b}/apache_owned_files.list |grep -v public_html |grep -v private_html)
+else
+	sk_da_domain_list=$(ls -1 domains/)
+fi
 for sk_da_dom in $sk_da_domain_list
 	do
-		sk_da_dom=${sk_da_dom:: -2}
+		if [ "$sk_get_dom" = 1 ];then
+			sk_da_dom=${sk_da_dom:: -2}
+		fi			
 		tput setaf 2
 		echo "Add $sk_da_dom if not exists"
 		tput sgr0 
@@ -160,18 +169,21 @@ for sk_da_dom in $sk_da_domain_list
 			echo "Domain $sk_da_dom added, restoring files"
 			echo $sk_da_dom >> sk_restored_domains
 			#some paths maybe change, I dont know yet so we get it.
-			sk_da_do_path=$(grep -w $sk_da_dom ${b}/apache_owned_files.list |grep -v "${sk_da_dom}=G" |grep -v "private_html")
-			sk_da_do_path=${sk_da_do_path:: -2}
+			if [ "$sk_get_dom" = 1 ];then
+				sk_da_do_path=$(grep -w $sk_da_dom ${b}/apache_owned_files.list |grep -v "${sk_da_dom}=G" |grep -v "private_html")
+				sk_da_do_path=${sk_da_do_path:: -2}
+			else
+				sk_da_do_path=${sk_da_dom}/public_html
+			fi
 			if [ "$sk_debug" != 0 ]; then
-				rm -f /home/${sk_da_user}/web/${sk_da_dom}/public_html/index.html
 				rsync -av ${d}/${sk_da_do_path}/ /home/${sk_da_user}/web/${sk_da_dom}/public_html 2>&1 | 
     			while read sk_file_dm; do
        			 	sk_sync=$((sk_sync+1))
-       			 	echo -en "Working: $sk_sync restored files\r"
+       			 	echo -en "-- $sk_sync restored files\r"
 				done
+				echo " "
 			else
 				rsync ${d}/${sk_da_do_path}/ /home/${sk_da_user}/web/${sk_da_dom}/public_html
-				rm -f /home/${sk_da_user}/web/${sk_da_dom}/public_html/index.html
 			fi
 			chown ${sk_da_user}:${sk_da_user} -R /home/${sk_da_user}/web/${sk_da_dom}/public_html
 			chmod 751 /home/${sk_da_user}/web/${sk_da_dom}/public_html
@@ -181,7 +193,7 @@ for sk_da_dom in $sk_da_domain_list
 done
 echo " "
 echo "Domains restored!"
-tput setaf 1
+tput setaf 2
 echo "Start restoring mails"
 tput sgr0 
 function sk_da_restore_imap_pass () {
@@ -192,8 +204,8 @@ else
 fi
 sk_actual_pass=$(grep -w $1 ${EXIM}/domains/$2/passwd |tr '}' ' ' | tr ':' ' ' | cut -d " " -f 3)
 sk_da_orig_pass=$(grep -w $1 ${b}/$2/email/passwd |tr ':' ' ' |cut -d " " -f2)
-replace "${sk_actual_pass}" "${sk_da_orig_pass}" -- ${EXIM}/domains/$2/passwd > /dev/null
-echo "Password for $1@$2 was restored"
+replace "${sk_actual_pass}" "${sk_da_orig_pass}" -- ${EXIM}/domains/$2/passwd
+echo "Password for $1@$2 restored"
 #################
 # fix vesta needed
 }
@@ -201,20 +213,18 @@ if [ -e sk_restored_domains ]; then
 cat sk_restored_domains | while read sk_da_mail_domain
 	do	
 		if [ "$(ls -A ${b}/${sk_da_mail_domain}/email/data/imap/)" ]; then
-			tput setaf 2
-			echo "Found IMAP Account for ${sk_da_mail_domain}"
-			tput sgr0 
+			echo "Found Imap for ${sk_da_mail_domain}"
 				ls -1 ${b}/${sk_da_mail_domain}/email/data/imap/ | while read sk_da_imap
 					do
-						echo "Restoring mails for ${sk_da_user}@${sk_da_mail_domain}"
 						/usr/local/vesta/bin/v-add-mail-account $sk_da_user $sk_da_mail_domain $sk_da_imap temp
 						if [ "$sk_debug" != 0 ]; then
 							rsync -av ${b}/${sk_da_mail_domain}/email/data/imap/${sk_da_imap}/Maildir/ /home/${sk_da_user}/mail/${sk_da_mail_domain}/${sk_da_imap} 2>&1 | 
     						while read sk_file_dm
 							do
        			 				sk_sync=$((sk_sync+1))
-       			 				echo -en "Working: $sk_sync restored files\r"
+       			 				echo -en "-- $sk_sync restored files\r"
 							done
+							echo " "
 						else
 							rsync ${b}/${sk_da_mail_domain}/email/data/imap/${sk_da_imap}/Maildir/ /home/${sk_da_user}/mail/${sk_da_mail_domain}/${sk_da_imap}
 						fi
@@ -226,9 +236,7 @@ cat sk_restored_domains | while read sk_da_mail_domain
 	done
 fi
 sk_delete_tmp
-tput setaf 4
 echo "Account $sk_da_user restored"
-echo "Report any errores in skamasle.com or in vesta forum ( official forum thread ) "
+echo "REport eny errores in skamasle.com or in vesta forum ( official forum thread ) "
 echo "Or in twitter @skamasle"
 echo "This was powered by skamasle.com | Maks Usmanov"
-tput sgr0
