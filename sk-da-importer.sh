@@ -69,7 +69,7 @@ if file $sk_file |grep -q -c "gzip compressed data," ; then
 			exit 1
 		fi
 	else
-	echo "Error 3 not-gzip - no stantard cpanel backup provided of file not installed ( Try yum install file, or apt-get install file )"
+	echo "Error 3 not-gzip - no stantard gziped backup provided of file not installed ( Try yum install file, or apt-get install file )"
 	sk_delete_tmp
 	exit 3
 fi
@@ -196,7 +196,7 @@ done
 echo " "
 echo "Domains restored!"
 tput setaf 2
-echo "Start restoring mails"
+	echo "Start restoring mails"
 tput sgr0 
 function sk_da_restore_imap_pass () {
 if [ -d /etc/exim ]; then
@@ -241,6 +241,6 @@ cat sk_restored_domains | while read sk_da_mail_domain
 fi
 sk_delete_tmp
 echo "Account $sk_da_user restored"
-echo "REport eny errores in skamasle.com or in vesta forum ( official forum thread ) "
+echo "Report eny errores in skamasle.com or in vesta forum ( official forum thread ) "
 echo "Or in twitter @skamasle"
 echo "This was powered by skamasle.com | Maks Usmanov"
