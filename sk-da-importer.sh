@@ -117,6 +117,8 @@ sk_da_db_user_list=$(ls -1 backup/ |grep ".conf")
 function sk_run_da_db () {
 for sk_da_db_u in $sk_da_db_user_list
 do
+	# Substring expresion -5: substring expression < 0
+	# userdb=$(echo $sk_da_db_u |sed "s/.conf//")
 	userdb=${sk_da_db_u:: -5}
 	md5=$(grep $userdb ${b}/${sk_da_db_u} | head -n 1 | tr '&' '\n ' |grep passwd |cut -d "=" -f 2)
 	db=$(grep db_collation ${b}/${sk_da_db_u} | tr '&' '\n ' |grep SCHEMA_NAME |cut -d "=" -f 2)
