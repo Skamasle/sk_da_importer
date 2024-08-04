@@ -9,6 +9,7 @@ TODO in V2
 - Restore CRON and FIX path
 - Restore DNS / MX
 - Mail restoring not tested yet
+- Restore aditional FTP accounts
 
 # sk_da_importer v1
 Import full user backup from directadmin in to vestacp
