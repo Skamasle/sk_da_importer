@@ -1,0 +1,280 @@
+#!/bin/bash
+# Original script by Maksim Usmanov -> 
+# Version v2 refurnished by Maksim Usmanov
+# v1 rebuilded by https://github.com/Aartsie some code in v2
+# taken from https://github.com/hestiacp/hestiacp/blob/main/bin/v-import-directadmin aported by Artsie and hestiacp team
+
+# V2 TODO:
+# Test Mail restore
+# Restore DNS
+# Restore CRON
+# Restore PHP version
+# Select what you need, DB, Web Or EMAIL
+
+VERSION=2.0-beta-1.0
+if [[ $1 == version ]] || [[ $1 == --version ]]; then
+    printf "Version: %s\n" "$VERSION"
+    exit
+fi
+NO_CHECK_USER=OFF # Put ON if you want force restoration in alredy existin user ( not recomended )
+# shellcheck source=/usr/local/hestia/func/main.sh
+source $HESTIA/func/main.sh
+# shellcheck source=/etc/hestiacp/hestia.conf
+source /etc/hestiacp/hestia.conf
+# load config file
+source_conf "$HESTIA/conf/hestia.conf"
+GREEN=$(tput setaf 2)
+RED=$(tput setaf 1)
+YELLOW=$(tput setaf 3)
+COLOROFF=$(tput sgr0)
+if [ $# -lt 1 ]; then
+	echo "usage: bash $0 da-backup.tar.gz"
+	exit 1
+fi
+
+if [ ! -e /usr/bin/rsync ] || [ ! -e /usr/bin/file ]; then
+    printf "%sWARNING:%s rsync not installed, try install it\n" "$YELLOW" "$COLOROFF"
+    printf "%sWARNING:%s This script need: rsync, file" "$YELLOW" "$COLOROFF"
+    printf "%sINFO:%s Run: apt-get install rsync file" "$GREEN" "$COLOROFF"
+    exit 3
+fi
+
+if [ -f "$1" ]; then
+	DA_BACKUP="$1"
+fi
+if [ -f "$1" ]; then
+	DA_BACKUP="$1"
+fi
+if [ -z "$BACKUP_TEMP" ]; then
+	BACKUP_TEMP=$BACKUP
+else
+	printf "%sWARNING:%s File does not exists\n" "$YELLOW" "$COLOROFF"
+	exit 1
+fi
+
+# Lets check if have space in home to restore all
+BACKUP_SIZE=$(stat -c %s "$DA_BACKUP")
+NEED_SPACE=$((BACKUP_SIZE * 2 + BACKUP_SIZE / 2))
+HOME_SPACE=$(df -B1 /home | awk 'NR==2 {print $4}')
+if [[ "$HOME_SPACE" -ge "$NEED_SPACE" ]]; then
+    printf "%sINFO:%s Detected sufficient space to restore the backup.\n" "$GREEN" "$COLOROFF" 
+else
+    printf "%sERROR:%s Dtected insufficient free space to import the backup, need %s bytes have %s bytes in home\n" "$RED" "$COLOROFF" "$NEED_SPACE" "$HOME_SPACE"
+    exit 4
+fi
+
+# Creating temporary directory
+TMPDIR=$(mktemp -p "$BACKUP_TEMP" -d)
+printf "%sINFO:%s TMPDIR is %s\n" "$GREEN" "$COLOROFF" "$TMPDIR"
+
+cleanup_and_exit() {
+    EXIT_CODE=$1
+    printf "%sINFO:%s Exit and clean %s\n" "$GREEN" "$COLOROFF" "$TMPDIR"
+
+    if [ -d "$TMPDIR" ]; then
+        rm -rf "$TMPDIR"
+    fi
+    exit "$EXIT_CODE"
+}
+trap 'cleanup_and_exit $?' EXIT
+
+printf "%sINFO:%s Checking provided file...\n" "$GREEN" "$COLOROFF"
+
+FILE_TYPE=$(file "$DA_BACKUP")
+
+if echo "$FILE_TYPE" | grep -q -c "gzip compressed data,"; then
+    printf "%sINFO:%s OK - Gzipped File Detected, Initiating Extraction:\n" "$GREEN" "$COLOROFF"
+    pv "$DA_BACKUP" |  tar xz  -C "$TMPDIR"
+    UNZIPED=$?
+elif echo "$FILE_TYPE" | grep -q -c "Zstandard compressed data"; then
+    printf "%sINFO:%s OK - ZSTD File Detected, Initiating Extraction:\n" "$GREEN" "$COLOROFF"
+    pv "$DA_BACKUP" | tar --use-compress-program=pzstd -x -C "$TMPDIR"
+    UNZIPED=$?
+else
+    printf "%sERROR:%s Unsupported file type detected.\n" "$RED" "$COLOROFF"
+    UNZIPED=1
+    exit 3
+fi
+
+
+if [[ $UNZIPED -eq 0 ]]; then
+	printf "%sINFO:%s Backup extracted without errors...\n" "$GREEN" "$COLOROFF"
+else
+	printf "%sERROR!! %s on backup extraction, check your file, try extract it manually\n"  "$RED" "$COLOROFF"
+	printf "%sINFO:%s Removing %s\n" "$GREEN" "$COLOROFF" "$TMPDIR"
+	exit 1
+fi
+
+cd $TMPDIR/
+MAIN_DIR=$(pwd)
+printf "%sINFO:%s Access tmp directory, working DIR is %s\n" "$GREEN" "$COLOROFF" "$MAIN_DIR"
+
+# Main Domain we need this here, later we get user password with this
+MAIN_DOMAIN1=$(awk -F '=' '/^domain=/ {print $2}' backup/user.conf )
+NEW_USER=$(awk -F '=' '/^username=/ {print $2}' backup/user.conf )
+printf "%sINFO:%s Get User: %s\n" "$GREEN" "$COLOROFF" "$NEW_USER"
+CHECK_SYSUSER=$(cut -f 1 -d : /etc/passwd | grep "^$NEW_USER$")
+if [ -n "$CHECK_SYSUSER" ] || [ -e "$HESTIA/data/users/$NEW_USER" ]; then
+    if [[ $NO_CHECK_USER == ON ]]; then
+        printf "%sWarning:%s %s Alredy exists in this server, but you select import backup in any way.\n" "$YELLOW" "$COLOROFF" "$NEW_USER"
+        NO_CREATE_USER=yes
+    else
+	    check_result "$E_EXISTS" "user $user exists"
+        printf "%sERROR:%s User allready exists\n"  "$RED" "$COLOROFF"
+	    exit 2
+	fi
+fi
+# TODO: need check DA packages
+HESTIA_PACKAGE="default"
+
+if [[ $NO_CREATE_USER != yes ]]; then
+# Create a new user
+    TMP_PASSWD=$(generate_password)
+    EMAIL=$(awk -F '=' '/^email=/ {print $2}' backup/user.conf)
+    if [ -z "$EMAIL" ]; then
+    	# Hestia does not like email to be set to an empty string
+    	EMAIL="admin@"$(hostname)
+    fi
+    $BIN/v-add-user "$NEW_USER" "$TMP_PASSWD" "$EMAIL" "$HESTIA_PACKAGE"
+    if [ "$?" -ne 0 ]; then
+    	printf "\n%sERROR%s: Unable to create user" "$GREEN" "$COLOROFF"
+    	exit 1
+    fi
+    # Restore user password
+    printf "\n%sINFO%s: Importing user password.\n" "$GREEN" "$COLOROFF"
+    update_user_value "$NEW_USER" 'MD5' "$(awk -F 'passwd=|&' -v user="$NEW_USER" '$1 ~ "^" user "=" {print $2}' backup/${MAIN_DOMAIN1}/ftp.passwd)"
+    $BIN/v-rebuild-user "$NEW_USER"
+fi
+
+# start databases
+
+restore_databases() {
+TIME=$(echo "$time_n_date" | cut -f 1 -d \ )
+DATE=$(echo "$time_n_date" | cut -f 2 -d \ )
+mysql -e "SET GLOBAL max_allowed_packet=1073741824;"
+printf "\n%sINFO%s: Importing databases.\n" "$GREEN" "$COLOROFF"
+mapfile -t SQL_FILES < <(ls -1 backup/ | grep ".sql")
+for DA_DB_FILE in "${SQL_FILES[@]}"; do
+    unset MULTI_DB_USERS
+    DA_DB=${DA_DB_FILE::-4}
+    printf "%sINFO%s: Importing database %s\n" "$GREEN" "$COLOROFF" "$DA_DB"
+    # head -n 1 just get first compatible database user with hestiacp
+    DB_USER=$(cat backup/${DA_DB}.conf | tr '&' '\n' | grep ^${NEW_USER}_  |awk -F "=" '{ print $1 }' | head -n 1)
+    COUNT_USERS=$(grep -c passwd backup/${DA_DB}.conf)
+    if [ $COUNT_USERS -gt 1 ]; then
+        printf "%sWARNING%s: Found %s users for database %s we will restore only one, hesta not support more than 1 user per database. .\n" "$YELLOW" "$COLOROFF" "$COUNT_USERS" "$DA_DB"
+        MULTI_DB_USERS=yes
+    fi
+    DB_USER_PASSWORD=$(awk -v user="$DB_USER" '$0 ~ user { match($0, /passwd=([^&]*)&/, arr); if (arr[1] != "") print arr[1] }' backup/${DA_DB}.conf )
+
+    FIXED_DB_PASSWORD=$(printf "%b" "$(echo "$DB_USER_PASSWORD" | sed 's/%/\\x/g')")
+    printf "%sINFO%s: Create database %s \n" "$GREEN" "$COLOROFF" "$DB_NAME"
+    printf "DB='%s' DBUSER='%s' MD5='%s' HOST='localhost' TYPE='mysql' CHARSET='UTF8' U_DISK='0' SUSPENDED='no' TIME='%s' DATE='%s'\n" \
+           "$DA_DB" "$DB_USER" "$FIXED_DB_PASSWORD" "$TIME" "$DATE" >> /usr/local/hestia/data/users/"$NEW_USER"/db.conf
+    mysql -e "CREATE DATABASE $DA_DB"
+    #Remove sandbox mode if exists in first line
+    sed -i '1{/\/\*!999999\\- enable the sandbox mode \*\//d}' backup/${DA_DB_FILE}
+    mysql $DA_DB < backup/${DA_DB_FILE}
+    if [[ "$MULTI_DB_USERS" == yes ]]; then
+        printf "%sWARNING%s: We only restore user called %s with access to database %s \n" "$YELLOW" "$COLOROFF" "$DB_USER" "$DA_DB"
+        printf "%sWARNING%s: This users was skiped: \n" "$YELLOW" "$COLOROFF" 
+        grep ${NEW_USER}_ backup/${DA_DB}.conf | awk -F '=' '{ print $1 }' |grep -v $DB_USER
+        printf '\n'
+    fi
+    
+done
+v-rebuild-databases $NEW_USER
+}
+
+sync_domains() {
+SYNC_COUNT=0
+rsync -av domains/${1}/ /home/${2}/web/${3}/ 2>&1 \
+    				| while read FILE; do
+    					SYNC_COUNT=$(($SYNC_COUNT + 1))
+    					printf "\r%sINFO:%s Importing -- %s files"  "$GREEN" "$COLOROFF" "$SYNC_COUNT "
+    				done
+}
+
+restore_domains() {
+    printf "\n%sINFO%s: Start with domains %s\n" "$GREEN" "$COLOROFF" "$DA_DB"
+# Old script get backups with ls -1 domains, but domains just have a paths
+# You can add domain in any path, so try get domains and subdomains from domain.conf
+
+DOMAINS_CONF=$(find backup -name domain.conf)
+SUBDOMAINS_CONF=$(find backup -name subdomain.list) ######## TODO  cambiar para incluir en el for de abajo.. y añadir los subdominios y dominios a la vez.
+for DA_DOMAIN_CONF_PATH in $DOMAINS_CONF
+do
+    DA_DOMAIN=$(awk -F '=' '/^domain=/ {print $2}' $DA_DOMAIN_CONF_PATH)
+    PRIVATE_HTML=$(awk -F '=' '/^private_html_is_link=/ {print $2}' $DA_DOMAIN_CONF_PATH)
+    ACTIVE=$(awk -F '=' '/^active=/ {print $2}' $DA_DOMAIN_CONF_PATH)
+        printf "%sINFO%s: Importing %s\n" "$GREEN" "$COLOROFF" "$DA_DOMAIN"
+    "$BIN"/v-add-domain "$NEW_USER" "$DA_DOMAIN"
+    if [ $? -ne 0 ]; then
+        printf "%sERROR%s: Cant add domain %s alredy used in another account ?\n" "$GREEN" "$COLOROFF" "$DA_DOMAIN"
+        continue
+    fi
+    sync_domains ${DA_DOMAIN} ${NEW_USER} ${DA_DOMAIN}
+    printf "\n%sINFO%s: Check Subdomains for %s\n" "$GREEN" "$COLOROFF" "$DA_DOMAIN"
+    if [[ -e "backup/${DA_DOMAIN}/subdomain.list" && -s "backup/${DA_DOMAIN}/subdomain.list" ]]; then
+        cat backup/${DA_DOMAIN}/subdomain.list | while read DA_SUBDOMAIN
+            do
+                    HESTIA_SUBDOMAIN="${DA_SUBDOMAIN}.${DA_DOMAIN}"
+                    printf "\n%sINFO%s: Add subdomain %s\n" "$GREEN" "$COLOROFF" "$DA_SUBDOMAIN" "$DA_DOMAIN" 
+                    "$BIN"/v-add-domain "$NEW_USER" "$HESTIA_SUBDOMAIN"
+                    if [ $? -ne 0 ]; then
+                        printf "%sERROR%s: Cant add subdomain %s alredy used in another account ?\n" "$GREEN" "$COLOROFF" "$DA_SUBDOMAIN"
+                        continue
+                    fi
+                    if [ -d "domains/${HESTIA_SUBDOMAIN}" ]; then
+                        sync_domains ${HESTIA_SUBDOMAIN} ${NEW_USER} ${HESTIA_SUBDOMAIN}
+                    elif [ -d "domains/${DA_SUBDOMAIN}" ]; then
+                        sync_domains ${DA_SUBDOMAIN} ${NEW_USER} ${HESTIA_SUBDOMAIN}
+                    else
+                        printf "%sERROR%s: Subdomain %s detected in configuration file, but not found files for restore" "$GREEN" "$COLOROFF" "$DA_SUBDOMAIN"
+                    fi    
+            done
+    else
+        printf "%sINFO%s: No subdomains found for %s\n" "$GREEN" "$COLOROFF" "$DA_DOMAIN"        
+    fi
+
+    
+done
+}
+
+da_restore_mail_password() {
+        #DirectAdmin passw is SHA512-CRYPT
+        DA_MAIL_PASSWORD=$(grep -w "$1" backup/"$2"/email/passwd | tr ':' ' ' | cut -d " " -f2)
+        USER_DATA=$HESTIA/data/users/${3}/
+        update_object_value "mail/${2}" 'ACCOUNT' "${1}" '$MD5' "{SHA512-CRYPT}$DA_MAIL_PASSWORD"
+        printf "%sINFO%s: eMail Password restored for %s.%s\n" "$GREEN" "$COLOROFF" "$1" "$2"
+        echo "Password for $1@$2 restored"
+
+}
+restore_mails() {
+${BIN}/v-list-web-domains user1tes plain | awk '{ print $1 }' | while read MAIL_DOMAIN
+do
+    if [ -d imap/${DA_MAIL_DOMAIN} ]; then
+        ls -1 imap/${DA_MAIL_DOMAIN} | while read DA_IMAP_ACCOUNT
+        do  
+            TMP_PASS=$(generate_password)
+            printf "%sINFO%s: Importing %s@%s\n" "$GREEN" "$COLOROFF" "$DA_IMAP_ACCOUNT" "$DA_MAIl_DOMAIN"
+            "$BIN"/v-add-mail-account "$NEW_USER" "$DA_MAIL_DOMAIN" "$DA_MAIL_ACCOUNT" "$TMP_PASS"
+            SYNC_COUNT=0
+            rsync "imap/${DA_MAIL_DOMAIN}/${DA_IMAP_ACCOUNT}/Maildir/" "/home/${NEW_USER}/mail/${DA_MAIL_DOMAIN}/${DA_IMAP_ACCOUNT}" 2>&1 \
+    				| while read FILE; do
+    					SYNC_COUNT=$(($SYNC_COUNT + 1))
+    					printf "\r%sINFO:%s Importing -- %s files"  "$GREEN" "$COLOROFF" "$SYNC_COUNT "
+    				done
+            chown "${NEW_USER}":mail -R /home/"${NEW_USER}"/mail/"${DA_MAIL_DOMAIN}"/"${DA_IMAP_ACCOUNT}"
+            find "/home/${NEW_USER}/mail/${DA_MAIL_DOMAIN}" -type f -name 'dovecot*' -delete
+            da_restore_mail_password "$DA_IMAP_ACCOUNT" "$DA_MAIl_DOMAIN" "$NEW_USER"
+        done
+        "$BIN"/v-rebuild-mail-domain "$NEW_USER" "$DA_MAIL_DOMAIN"
+    fi
+done
+}
+restore_databases
+restore_domains
+restore_mails
+
+
