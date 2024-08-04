@@ -1,8 +1,9 @@
 #!/bin/bash
-# Original script by Maksim Usmanov -> 
-# Version v2 refurnished by Maksim Usmanov
+# Original script by Maksim Usmanov - 2017
+# Version v2 refurnished by Maksim Usmanov - 2024
 # v1 rebuilded by https://github.com/Aartsie some code in v2
 # taken from https://github.com/hestiacp/hestiacp/blob/main/bin/v-import-directadmin aported by Artsie and hestiacp team
+# Thanks all people who working in this and hestiacp.
 
 # V2 TODO:
 # Test Mail restore
