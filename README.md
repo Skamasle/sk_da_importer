@@ -1,4 +1,16 @@
-# sk_da_importer
+# v-import-directadmin v2
+2.0-beta-1.0:
+- Improve Output
+- Now restore subdomain
+- Advice what database user not restored
+
+TODO in V2
+- Restore PHP version
+- Restore CRON and FIX path
+- Restore DNS / MX
+- Mail restoring not tested yet
+
+# sk_da_importer v1
 Import full user backup from directadmin in to vestacp
 
 This ill import FULL User backup from DirectAdmin to vestacp
